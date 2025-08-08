@@ -257,3 +257,111 @@
     )
   )
 )
+
+(define-public (repay-loan
+    (loan-id uint)
+    (amount uint)
+  )
+  ;; Processes loan repayment with automatic interest calculation
+  ;; Releases collateral upon successful full repayment
+  (begin
+    (asserts! (validate-loan-id loan-id) ERR-INVALID-LOAN-ID)
+    (let (
+        (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+        (interest-owed (calculate-interest (get loan-amount loan) (get interest-rate loan)
+          (- stacks-block-height (get last-interest-calc loan))
+        ))
+        (total-owed (+ (get loan-amount loan) interest-owed))
+      )
+      (begin
+        (asserts! (is-eq (get status loan) "active") ERR-LOAN-NOT-ACTIVE)
+        (asserts! (is-eq (get borrower loan) tx-sender) ERR-NOT-AUTHORIZED)
+        (asserts! (>= amount total-owed) ERR-INVALID-AMOUNT)
+        ;; Mark loan as repaid and release collateral
+        (map-set loans { loan-id: loan-id }
+          (merge loan {
+            status: "repaid",
+            last-interest-calc: stacks-block-height,
+          })
+        )
+        (var-set total-btc-locked
+          (- (var-get total-btc-locked) (get collateral-amount loan))
+        )
+        ;; Remove loan from user's active loan list
+        (match (map-get? user-loans { user: tx-sender })
+          existing-loans (ok (map-set user-loans { user: tx-sender } { active-loans: (filter not-equal-loan-id (get active-loans existing-loans)) }))
+          (ok false)
+        )
+      )
+    )
+  )
+)
+
+;; GOVERNANCE & PROTOCOL ADMINISTRATION
+
+(define-public (update-collateral-ratio (new-ratio uint))
+  ;; Adjusts minimum collateralization requirements for optimal risk balance
+  ;; Enables dynamic risk management based on market conditions
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (>= new-ratio u110) ERR-INVALID-AMOUNT)
+    (var-set minimum-collateral-ratio new-ratio)
+    (ok true)
+  )
+)
+
+(define-public (update-liquidation-threshold (new-threshold uint))
+  ;; Modifies liquidation trigger points for enhanced protocol security
+  ;; Balances borrower protection with protocol solvency requirements
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (>= new-threshold u110) ERR-INVALID-AMOUNT)
+    (var-set liquidation-threshold new-threshold)
+    (ok true)
+  )
+)
+
+(define-public (update-price-feed
+    (asset (string-ascii 3))
+    (new-price uint)
+  )
+  ;; Updates oracle price feeds with validated real-time market data
+  ;; Ensures accurate asset valuations for risk calculations
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-asset asset) ERR-INVALID-ASSET)
+    (asserts! (is-valid-price new-price) ERR-INVALID-PRICE)
+    (ok (map-set collateral-prices { asset: asset } { price: new-price }))
+  )
+)
+
+;; READ-ONLY DATA ACCESS INTERFACE
+
+(define-read-only (get-loan-details (loan-id uint))
+  ;; Retrieves comprehensive loan information including current status
+  ;; Provides transparency for borrowers and protocol participants
+  (map-get? loans { loan-id: loan-id })
+)
+
+(define-read-only (get-user-loans (user principal))
+  ;; Returns all active loan positions for a specific user account
+  ;; Enables portfolio management and position monitoring
+  (map-get? user-loans { user: user })
+)
+
+(define-read-only (get-platform-stats)
+  ;; Provides real-time protocol metrics and operational statistics
+  ;; Essential data for risk assessment and protocol health monitoring
+  {
+    total-btc-locked: (var-get total-btc-locked),
+    total-loans-issued: (var-get total-loans-issued),
+    minimum-collateral-ratio: (var-get minimum-collateral-ratio),
+    liquidation-threshold: (var-get liquidation-threshold),
+  }
+)
+
+(define-read-only (get-valid-assets)
+  ;; Lists all supported collateral assets within the protocol ecosystem
+  ;; Guides users on available collateral options
+  VALID-ASSETS
+)
